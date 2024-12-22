@@ -1,0 +1,733 @@
+---
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<style>
+  body {
+    text-align: justify}
+  h1 {
+    font-size: 20px;
+    text-align: center;
+  }
+  h2 {
+    font-size: 19px;
+  }
+  h3 {
+    font-size: 18px;
+  }
+  p {
+    font-size: 18px;
+    margin-bottom: 20px;
+  }
+  .custom-space {
+    margin-bottom: 150px;
+  }
+  .custom-space2 {
+    margin-bottom: 45px;
+  }
+
+
+</style>
+
+<div class="custom-space"></div>
+
+# Project: The Forecasting Tourism 2010 Competition (JIF)
+# Predictive Business and Finance [EM1415]
+# Author: Gian Mario Biscontin 880962
+
+
+<div class="custom-space"></div>
+
+## Index:
+
+### 1. Data Preparation and data visualization
+#### 1.1 Load Required Libraries
+#### 1.2 Load data
+#### 1.3 Data Visualization
+##### 1.3.1 Quantity
+##### 1.3.2 Magnitude
+##### 1.3.3 Behaviour
+### 2. Data Modelling
+#### 2.1 Data Partitioning
+#### 2.2 Forecast and Forecast Evaluation
+#### 2.3 MAPE and MASE visualization
+### 3. Model specification
+<div class="custom-space"></div>
+
+## 1. Data Preparation and data visualization
+
+### 1.1 Load Required Libraries
+
+```{r, results = FALSE}
+library(tidyverse)
+library(reshape2) 
+library(forecast)
+library(fpp3)
+library(seasonal)
+library(tsibble)
+
+```
+<div class="custom-space2"></div>
+
+### 1.2 Load data
+
+Loading of the time series data into R and check its structure, column names, and any potential issues.
+```{r}
+tourism_csv = read.csv("tourism_data.csv")
+class(tourism_csv)
+length(tourism_csv)
+head(tourism_csv[1:7])
+```
+
+The csv ("tourism_data.csv") imported consists of 518 **heterogeneous** time series. 
+
+We convert all the time series in integer format with `as.numeric` function, to avoid format problems later on. 
+```{r}
+tourism_csv[] = lapply(tourism_csv, as.numeric)
+```
+
+
+Then, the melt() function from the reshape2 package. It is used to reshape the original wide-format data frame (tourism_csv) into a long-format data frame, which makes it easier for time series visualization. The group_by() function groups the data by the "variable" column (time series), and mutate() adds a new column "Time_Count" that counts the time steps from 1 to the length of each time series.
+```{r}
+mod_df <- melt(tourism_csv, id.vars = NULL)
+mod_df <- mod_df %>%
+  group_by(variable) %>%
+  mutate(Time_Count = row_number())
+```
+
+<div class="custom-space2"></div>
+
+### 1.3 Data Visualization
+
+```{r}
+a1= ggplot(data = mod_df, aes(x = Time_Count, y = value, group = variable, color = variable)) +
+  geom_line() +
+  labs(title="Figure 1: All time series plot" ,x = "Time", y = "Value")+
+  theme_minimal()+
+  guides(color = FALSE, scale="none")
+a1
+```
+
+In delving into our data through the plot, a distinct pattern emerges, highlighting the heterogeneous nature of our time series. One of the most important observations concerns the different starting points for each time series: there is no uniform start across the board. Interestingly, most seem to start around the 15th-20th timestep.
+
+Furthermore, it is interesting to note that values rarely exceed the 5,000,000.00 threshold, underscoring a common range within which most data fluctuates. This could potentially indicate a prevailing trend or shared characteristics across most of our time series. But since we are talking about very wide ranges it is difficult to say.
+
+However, in this general trend, some outliers break out of the norm. Three specific time series not only start at unusually high values, but consistently maintain these high levels throughout the observed period. These outliers  havs values consistently above 10,000,000.00.
+
+
+heterogeneity concerns 3 aspects:
+
+- the **quantity** of available data,  
+- the order of **magnitude** of the values and 
+- the **behavior** of data over time. 
+<div class="custom-space2"></div>
+
+
+#### 1.3.1 Quantity
+
+In quantitative terms, the initial table confirms the variance in the starting points of the time series as seen before, with some starting earlier than others.
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+pl1=tourism_csv[0:10,15:25]
+pl2=tourism_csv[33:43,15:25]
+pl1
+pl2
+```
+
+```{r}
+na_count_per_row <- rowSums(is.na(tourism_csv))
+mean13 = mean(na_count_per_row)
+median13= median(na_count_per_row)
+
+na_count_df = data.frame(Value= na_count_per_row, T_= 1:43 )
+ggplot(na_count_df, aes(x=T_, y=na_count_per_row))+
+  geom_line()+
+  geom_hline(aes(yintercept= mean13), col="darkred", alpha=0.5)+
+  geom_hline(aes(yintercept= median13), col="darkblue", alpha=0.5)+
+  labs(y="missing value count", x= "timestep")+
+  annotate("text", x = max(na_count_df$T_), y = mean13, label = "Mean", color = "darkred", hjust = 1, vjust = -0.7) +
+  annotate("text", x = max(na_count_df$T_), y = median13, label = "Median", color = "darkblue", hjust = 1, vjust = -0.7) +
+  theme_minimal()
+  
+```
+The line graph, we observe a clear trend in the decrease of missing values (NA) in the time series. The initial scenario portrays a lack of values, which gradually transform as we approach the final time steps available to us, where values become present across all time series.
+
+The red line indicates the average of the missing values over time (271), while the blue line represents the median value (176). 
+
+Going into specifics:
+
+- Only two series provide data that cover the entire time period considered.
+- Particularly around time step 21, there is a substantial reduction in missing values, with data available for approximately 65% of the series.
+- From the 37th time step onwards, data is available for all time series.
+
+<div class="custom-space2"></div>
+
+
+#### 1.3.2 Magnitude
+
+The second aspect to consider is the magnitude of the values. The first parameter analyzed is the mean.
+
+```{r, echo=FALSE}
+mean_df = mod_df%>%group_by(variable)%>%summarize(mean=mean(value, na.rm = TRUE))
+
+a2 = summary(mean_df$mean)
+
+a1 = summary(tourism_csv[0:10])
+
+a3 = ggplot(mean_df)+
+  geom_boxplot(aes(x=mean))+
+  theme_minimal()+
+  labs(title = "Means Boxplot", x = "Means")
+
+```
+
+```{r out.width=c('50%', '50%', '50%'), fig.show='hold', echo=FALSE}
+a1
+a2
+a3
+```
+
+In terms of scale of values, it is evident that some time series show significantly higher mean values than others. For example, comparing the average of Y3 (116,665.00) with that of Y10 (1,834.1) highlights substantial variations.
+
+Taking the overall mean of all values in the time series, the interquartile range difference is 54,091.00. This indicates a wide-ranging distribution of values, making the scale noticeably large. Furthermore, the maximum value recorded is 26,823,437, a notable distance from the average. The time series mean, therefore, does not consistently float around a specific range of values, but can vary significantly. 
+
+This variance presents a challenge in representing the distribution effectively. Indeed, the scatterplot appears noticeably compressed, presenting extreme outliers.
+
+Very different means could reflect differences in the behavior patterns of the series. Some may be more volatile, while others may maintain more constant values over time. Furthermore some forecasting models may be more sensitive to scale variations. Choosing models that are robust or that better handle series variability can be crucial.
+
+
+Considering the variance among the time series, there is a similar situation to that of the mean. The time series presents significantly different variations. There is a substantial contrast between the minimum variances, which hover around zero, and the maximum ones, reaching approximately 1.75e+14. This discrepancy has a significant impact on the interquartile range, measuring approximately 8.32e+8, which is considerably wider than that of the average.
+And the mean of the variances remains remarkably high. 
+Just as with averages, getting a clear graphical representation becomes nearly impossible, indeed the scatterplot appears compressed due to the wide range of variances.
+
+```{r, echo=FALSE}
+#varianza
+variances <- apply(tourism_csv, 2, var, use = "complete.obs")
+
+statistical_var <- data.frame(
+  TimeSeries = colnames(tourism_csv),
+  Variance = variances
+)
+
+
+sum1= statistical_var%>%arrange(variances)
+
+
+var_mean = mean(statistical_var$Variance)
+var_median = median(statistical_var$Variance)
+sum2 = summary(statistical_var$Variance)
+pl3 = ggplot(statistical_var)+
+  geom_boxplot(aes(x=Variance))+
+  theme_minimal()
+
+#pl4 = ggplot(statistical_var[statistical_var$Variance<=quantile(statistical_var$Variance, 0.75),])+
+#  geom_histogram(aes(x=Variance), bins=100)+
+#  geom_vline(xintercept = var_median, color= "darkblue")+
+#  theme_minimal()
+```
+
+```{r out.width=c('50%', '50%', '50%'), fig.show='hold', echo=FALSE}
+head(sum1)
+sum2
+pl3
+```
+
+Having examined the means and variances separately, let us now delve deeper into their relationship. On the x-axis, we have the means, and on the y-axis, we have the variances. Both have undergone a logarithmic transformation to improve the clarity of the graph.
+From the distribution of points and the green dotted line (linear regression), a robust positive correlation between these two factors is distinctly evident. Time series with higher means consistently show higher variances. Surprisingly, there are no outliers within this correlation. Understanding this relationship is critical in the context of time series forecasting. This insight can guide forecasting models, enabling more informed decisions, particularly when dealing with series characterized by higher means and variances.
+
+
+```{r, echo=FALSE}
+measures_df= data.frame(
+  TimeSeries = colnames(tourism_csv),
+  Mean = mean_df$mean,
+  Variance = statistical_var$Variance
+)
+
+ggplot(measures_df)+
+  geom_point(aes(x=log(Mean), y= log(Variance)))+
+  geom_smooth(aes(x=log(Mean), y= log(Variance)),method = "lm", se = FALSE, color = "darkgreen",size = 1, linetype="dashed" ) + 
+  labs(title = "Scatter Plot with Linear Regression Trend Line")
+  
+```
+
+
+<div class="custom-space2"></div>
+
+
+#### 1.3.3 Behaviour
+
+Now, let's delve deeper into the temporal behavior of the time series. From the first graph, in addition to the considerations regarding the starting points and magnitudes of the time series, we observe a subtle general tendency to increase. Over the periods, the series appears to increase gradually, indicating a positive trend.
+
+The second graph acts as an enlarged version of the first. Despite the apparent chaos, common patterns between some series become recognizable here. 
+
+Recognizing the presence of a shared long-term trend or common fluctuations between some time series can significantly aid the interpretation and development of forecasting models. Understanding these underlying patterns contributes valuable insights, enabling a more concious and accurate approach to forecasting.
+
+```{r,  results = 'hide', echo=FALSE}
+a2=ggplot(data = mod_df,aes(x = Time_Count, y = log(value), color = variable)) +
+  geom_line(alpha=0.5) +
+  labs(title="Figure 2: Cropped and log trasformed plot" ,x = "Time", y = "log(value)") +
+  theme_minimal()+
+  guides(color = FALSE)
+
+a3=ggplot(data = mod_df,aes(x = Time_Count, y = log(value), color = variable)) +
+  geom_line(alpha=0.5) +
+  labs(title="Figure 2: Cropped and log trasformed plot" ,x = "Time", y = "log(value)") +
+  theme_minimal()+
+  guides(color = FALSE)+
+  xlim(20, 43)+
+  ylim(5,10)
+```
+
+```{r out.width=c('50%', '50%'), fig.show='hold', echo=FALSE}
+a2
+a3
+```
+
+Let's check this positive trend hypothesis computing the avarage slope of linear regression among all time series.
+
+```{r}
+result_df <- data.frame(Variable = character(), Slope = numeric(), stringsAsFactors = FALSE)
+
+ts_names <- colnames(tourism_csv)
+
+for (ts in ts_names) {
+  current_ts <- mod_df %>% filter(variable == ts)
+
+  ts1 <- na.omit(current_ts)
+  linear_model <- lm(value ~ Time_Count, data = ts1)
+  slope_value <- coef(linear_model)[2]
+  result_df <- rbind(result_df, data.frame(Variable = ts, Slope = slope_value))
+}
+```
+
+
+
+From the histogram chart, it is evident that the majority of time series exhibit a positive slope. This positive incline highlights an overall tendency to increase over time.
+
+```{r,echo=FALSE}
+ggplot(result_df)+
+  geom_histogram(aes(x=Slope))+
+  xlim(-5000, 10000)
+```
+
+
+<div class="custom-space2"></div>
+
+Now, let's analyze the behavior of the time series in relation to each other, specifically examining their correlation.
+
+There is a total of 268,324 possible combinations of time series. After removing pairs that are the same but differ in position (e.g., Y1-Y2 and Y2-Y1) since the correlation doesn't change with the interchange of factors, we are left with 134,162 values. Removing the correlation values of a time series with itself, we arrive at a total of 133,644 unique time series.
+
+Out of these, 9,956 have an absolute correlation greater than 0.95. This means only 7.45% of them have a correlation exceeding 0.95.
+
+However, if we consider a lower threshold, such as 0.80, there are 59,420 pairs, approximately 44%. There are relatively few strongly correlated time series, but there are many with lower correlations. Therefore, we can expect that the majority of them influence each other.
+
+```{r, echo=FALSE}
+cor_full <- cor(tourism_csv, use = "complete.obs")
+highly_correlated <- which((cor_full > 0.80 | cor_full < -0.80) & cor_full != 1 & cor_full != -1, arr.ind = TRUE, useNames = TRUE)
+
+correlation_data <- data.frame(
+  Variable1 = colnames(cor_full)[highly_correlated[, 1]],
+  Variable2 = colnames(cor_full)[highly_correlated[, 2]],
+  Correlation = cor_full[highly_correlated]
+)
+
+summary(correlation_data)
+correlation_data <- correlation_data[correlation_data$Variable1 != correlation_data$Variable2, ]
+corr_arranged= correlation_data %>%arrange(desc(Correlation))
+head(corr_arranged)
+```
+```{r, echo=FALSE}
+count1 <- sum(cor_full > 0.98 & cor_full != 1 & cor_full != -1)
+cat("Time series with a correlation higher than 0.98: ", count1, "\n")
+
+count2 <- sum(cor_full < -0.98 & cor_full !=1 & cor_full != -1)
+cat("Time series with a correlation lower than -0.98: ", count2, "\n")
+```
+
+
+```{r, echo=FALSE}
+plot_data <- mod_df %>% 
+  filter(variable %in% c("Y444", "Y86"))
+
+ggplot(plot_data, aes(x = Time_Count, y = value, color = variable)) +
+  geom_line() +
+  labs(title = "Time Series Y86 and Y444", x = "Time Count", y = "Value") +
+  theme_minimal()
+```
+
+Here the most correlated time series: Y86 and Y444 with a correlation of 0.9999867
+
+<div class="custom-space2"></div>
+
+
+## 2. Data Modelling
+
+In order to create a forecast model it is essential to make a partition of them: between training and validation set. Since we have time series with different lengths and some of them do not have many observations splitting the data of a time series into training and validation sets, with the last 4 years in the validation period is a good option. The rationale behind this split is to simulate model performance on unseen future data, since the validation set contains data from a later time periods. This helps to assess the model's ability to generalize to new data. However, the disadvantage of this approach is that it can lead to a smaller training set, which can affect the model's ability to learn complex models and can result in less accurate models.
+
+
+```{r, eval= FALSE, include=FALSE}
+# da cancellare 
+
+
+mod_df2 <- mod_df %>%
+  group_by(variable) %>%
+  select(-Time_Count)%>%
+  mutate(Time_Stamp = seq(as.Date("2023-01-01"), as.Date("2023-02-12"), by = "1 day"))
+
+mod_df_filled= mod_df2%>%group_by(variable)%>%fill(value, .direction="up")
+
+grouped_data <- mod_df_filled %>%
+  group_split(variable)
+
+convert_to_tsibble <- function(group) {
+  as_tsibble(group, key = variable, index = Time_Stamp)
+}
+
+tsibble_list= map(grouped_data, convert_to_tsibble)
+```
+
+
+
+Before the using of the data, time series are converted into tsibbles (time-series tibbles), ensuring removal of missing values. The resulting list, tsibble_list, contains tsibbles for each tourism time series. This process facilitates organized handling of time-series data for subsequent analysis or modeling.
+
+```{r, echo=FALSE}
+mod_df2 <- mod_df %>%
+  group_by(variable)
+
+#mod_df_filled= mod_df2%>%
+#  group_by(variable)%>%
+#  fill(value, .direction="up")
+
+grouped_data <- mod_df2 %>%
+  group_split(variable)
+
+convert_to_tsibble <- function(group) {
+  group <- na.omit(group)
+  as_tsibble(group, key = variable, index = Time_Count)
+}
+
+tsibble_list= map(grouped_data, convert_to_tsibble)
+tsibble_list[[1]]
+```
+<div class="custom-space2"></div>
+
+
+
+### 2.1 Data Partitioning
+
+```{r}
+split_fun <- function(tsibble_data) {
+  validation_cutoff <- 40
+  training_set <- filter(tsibble_data, Time_Count < validation_cutoff)
+  validation_set <- filter(tsibble_data, Time_Count >= validation_cutoff)
+  
+  return(list(training = training_set, validation = validation_set, cut_off= validation_cutoff))
+}
+
+partitioned_list <- lapply(tsibble_list, split_fun)
+
+training_sets <- lapply(partitioned_list, function(x) x$training)
+validation_sets <- lapply(partitioned_list, function(x) x$validation)
+
+```
+
+Since the time series have all different length the training sets will differ. However, the validation sets will be uniform since they all share the same final time count across the series.
+
+```{r, echo=FALSE}
+for (i in 1:5) {
+  if (!is.null(training_sets[[i]]$Time_Count)) {
+    cat("Length Trainingof Time Series", i, ":", length(training_sets[[i]]$Time_Count), "\n")
+    cat("Length Validation of Time Series", i, ":", length(validation_sets[[i]]$Time_Count), "\n\n")
+  } else {
+    cat("Time series", i, "not available.\n")
+  }
+}
+```
+
+<div class="custom-space2"></div>
+
+### 2.2 Forecast andForecast Evaluation
+
+Now that we have the training and validation sets, we are going to forecast. 
+To well forecast a time series is not easy. To start a naive forecast is a good choice. Despite its simplicity, the naive forecast creates a baseline for more advanced forecasting methods. It serves as a reference point against which the performance of other, more sophisticated forecasting models can be compared. This allows for the assessment of the value added by the more advanced methods.
+
+Let's generate predictions for the next 4 years (Ft+1, Ft+2, Ft+3, and Ft+4) using the model(NAIVE()) function based on the training set data.
+
+```{r}
+create_naive_forecasts <- function(data) {
+  data%>%
+    model(NAIVE = NAIVE(value)) %>%
+    forecast(h = 4)}
+
+naive_forecasts_list <- lapply(training_sets, create_naive_forecasts)
+```
+The naive forecast for each time series are stored in a list "naive_forecasts_list".
+
+```{r}
+naive_forecasts_list[[1]]%>%autoplot(training_sets[[1]], level = NULL)
+```
+
+In order to evaluate this forecast we take into account 5 measurements: Mean Absolute Error (MAE), Average error, Mean Absolute Percentage Error (MAPE), Root Mean Squared Error (RMSE) and the Mean Absolute Scaled Error (MASE)
+
+- Mean Absolute Error: MAE is a metric used to measure the average magnitude of errors between forecast and actual values in absolute terms. 
+It is define as follows: \[ MAE = \frac{1}{T} \sum_{t=1}^{T} |y_t - \hat{y}_t| \]. 
+It provides an easy assessment of forecast accuracy without considering the direction of the errors. A lower MAE indicates a better fit of the model to the data. For example, an MAE of 10 implies that, on average, the forecast's distance from the true value is 10.
+
+- Average Error: is a measure that quantifies the average difference between the forecast values and the actual observed values: \[{AE} = \frac{1}{T} \sum_{t=1}^{T} (y_t - \hat{y}_t)\]
+It provides an indication of the typical magnitude of the errors in the forecast. The lower average error, the better it is.
+
+
+- Mean Absolute Percentage Error: MAPE is expressed as a percentage and provides insight into the accuracy of the forecast in relation to the actual values. MAPE is particularly useful when different forecast models or time series need to be compared because this is a percentage value. 
+However, MAPE suffers from two main disadvantages: that it generates infinite or undefined values when dealing with actual values that are zero or close to zero and it's asymmetrical in the penalty of positive and negative error (giving more penalty on the negative side).
+The mape formula is: \[{MAPE} = \frac{1}{T} \sum_{t=1}^{T} \left| \frac{y_t - \hat{y}_t}{y_t} \right| \times 100\]
+
+- Root Mean Squared Error: RMSE gives more weight to large errors compared to MAE, as it involves squaring the differences between the forecast and the actual values. It is useful for understanding the typical size of the forecast error. RMSE does not treat each error the same and gives more importance to the most significant errors (not robust to the outliers). A lower RMSE indicates a better fit of the model to the data.
+\[{RMSE}(y, \hat{y}) = \sqrt{\frac{\sum_{t=0}^{T - 1} (y_t - \hat{y}_t)^2}{T}}\]
+
+
+- The Mean Absolute Scaled Error (MASE) is calculated by dividing the mean absolute error of the forecast by the mean absolute error of a naive forecast for the given time series. 
+The formula depends on the time series is seasonal or not. For Non seasonal time series: \[{MASE} = \frac{\frac{1}{T} \sum_{t=1}^{T} |y_t - \hat{y}_t|}{\frac{1}{T-1} \sum_{t=2}^{T} |y_t - y_{t-1}|}\]And for seasonal time series: \[{MASE} = \frac{\frac{1}{T} \sum_{t=1}^{T} |y_t - \hat{y}_t|}{\frac{1}{T-m} \sum_{t=m+1}^{T} |y_t - y_{t-m}|}\]It is particularly useful when comparing the performance of different models on different time series data. It is less sensitive to outliers compared to other metrics like MAPE. By using the naive forecast as the benchmark, the MASE provides a measure of forecast accuracy that is independent of the scale of the data, making it easier to compare the performance of different models across different time series. A MASE value of 1 indicates that the forecast model is performing as well as the naive forecast, while a value less than 1 suggests that the forecast model is outperforming the naive forecast.
+The main problem with MASE is that it may not be suitable for time series with a short history as it is based on the mean absolute error of the training data, which can be unstable with a small sample size
+
+
+In conclusion, out of the metrics discussed, only two are suitable for comparing heterogeneous time series in our context: MAPE and MASE.
+
+MASE provides a clear benchmark for forecast accuracy by comparing the forecast error of a model to the forecast error of a naive model, but on the other hand, MAPE is simple to calculate and easy to interpret, expressing the forecast error as a percentage of the actual value.
+
+Calculating these errors for the training set provides insight into how well the model fits the data used for training, while calculating the validation set provides an assessment of the model's accuracy on data not used during training. This helps identify any model overfitting or underfitting issues and provides an estimate of expected accuracy on new data.
+
+```{r, results = 'hide'}
+accuracy_measure <- function(tsib, training_sets, validation_sets) {
+  naive_model <- training_sets %>% model(NAIVE = NAIVE(value))
+  forecast_naive_model = naive_model %>% forecast(h = 4)
+  
+  naive_model$TimeSeriesLength <- length(tsib$Time_Count)
+
+  # VALIDATION SET
+  measures_validation = forecast_naive_model%>%
+    accuracy(tsib)
+  
+  naive_model$MAPE_validation = measures_validation$MAPE
+  naive_model$MASE_validation = measures_validation$MASE
+
+  # TRAINING SET
+  training_shifted = training_sets %>%
+    mutate(Time_Count = Time_Count + 4)
+
+  measure_training = accuracy(forecast_naive_model, training_shifted)
+  
+  naive_model$MAPE_training = measure_training$MAPE
+  naive_model$MASE_training = measure_training$MASE
+
+  return(naive_model)
+}
+
+naive_forecasts_accuracy <- mapply(accuracy_measure,tsib= tsibble_list, training_set = training_sets, validation_set= validation_sets, SIMPLIFY = FALSE)
+
+
+```
+<div class="custom-space2"></div>
+
+
+### 2.3 MAPE and MASE visualization
+
+```{r}
+info_list <- list()
+
+for (i in 1:length(naive_forecasts_accuracy)) {
+  model = naive_forecasts_accuracy[[i]]
+  
+  time_series = model$variable
+  MAPE_val = model$MAPE_validation
+  MAPE_tr = model$MAPE_training
+  MASE_val = model$MASE_validation
+  MASE_tr = model$MASE_training
+  length = model$TimeSeriesLength
+  
+  result_df <- data.frame(
+    time_series = time_series,
+    MAPE_val = MAPE_val,
+    MAPE_tr = MAPE_tr,
+    MASE_val = MASE_val,
+    MASE_tr = MASE_tr,
+    length = length
+  )
+
+  info_list[[i]] <- result_df
+}
+
+info_df <- do.call(rbind, info_list)
+```
+
+
+```{r, echo=FALSE}
+ggplot(info_df, aes(x = MAPE_tr, y = MAPE_val)) +
+  geom_point(alpha=0.7) +
+  labs(title = "Scatter Plot of MAPE Pairs",
+       x = "Training MAPE",
+       y = "Validation MAPE")+
+  theme_light()
+```
+
+Looking at the scatter plot of the MAPE pairs seems that the training MAPE values are generally slightly smaller than the validation MAPE values, indicating a better fit of the model to the training data. We do not have a strong difference between them because as we have seen the behaviour of the timeseries is in general increasing but  within 4 year considered they can be very differen. and also due to the use of the naive forecast that take into account just one (last) observation.
+Additionally, not considering the time series with training mape of about 300, there are more outliers in the validation set than in the training set, indicating a wider range of performance across the validation series. This implies that the model's performance varies more across the different series in the validation set compared to the training set. 
+
+
+The model's performance on the validation data isn't significantly different from the naïve forecasting method on the training set, so it results in a difference between the training and validation MASE.
+Moreover from the logged plot we can see that the length of the time series actually doesn't affect the mase calculation.
+
+
+```{r, echo=FALSE}
+c22= ggplot(info_df, aes(x = MASE_tr, y = MASE_val)) +
+  geom_point(aes(color= length)) +
+  scale_color_gradient(low = "green", high = "blue")+
+  scale_y_log10()+
+  scale_x_log10()+
+  labs(title = "Logged Scatter Plot of MASE Pairs",
+       x = "Training MASE",
+       y = "Validation MASE")+
+  theme_light()
+  
+c32= ggplot(info_df, aes(x = MASE_tr, y = MASE_val)) +
+  geom_point(alpha=0.7) +
+  labs(title = "Scatter Plot of MASE Pairs",
+       x = "Training MASE",
+       y = "Validation MASE")+
+  theme_light()
+
+c32
+c22
+
+```
+
+The length of the time series doesn't seem to affect the MASE performace.
+
+<div class="custom-space2"></div>
+
+
+## 3. Model specification
+
+The competition winner, Lee Baker, used an ensemble of three methods:
+- Naive forecasts multiplied by a constant trend (global/local trend: ”globally tourism has grown ”at a rate of 6% annually.”)\[\hat{y}_{t+h} = y_t \cdot (1 + \gamma)\]
+
+- Linear regression\[ \hat{y} = b_0 + b_1 \cdot x \]
+
+- Exponentially-weighted linear regression\[ \hat{y}_{t+h}  = b_0 + b_1 \cdot S \\ where \ S = \alpha \cdot y_{t}+(1 - \alpha) \cdot S_{t-1} \]
+
+The formula that embody the 3 model could be the following.
+
+\[ F_{{t+k}|{T}} = \ L_{t} \]
+
+\[ \ \ \ \ L_{t-1} =  \alpha \cdot (y_{t-1}  \cdot (1 + \gamma)) + (1-\alpha) \cdot \ L_{t-1}]\]
+
+
+\[
+\text{EWMA}_t = \alpha \times \text{observation}t + (1 - \alpha) \times \text{EWMA}{t-1}
+\]
+
+
+\(F_{{t+k}|{T}} \)is the forecast for k = 1, 2, 3, 4
+\( L_{t}\)is the level paramether
+\(\alpha\)is the mooving avarage paramether
+\(y_{t-1} \)is the last observation
+\(\gamma\)is the constant value. (positive global tourism trend)
+
+note that if \(\alpha\) is equal to 1 we have a naive forecast multiplied by a constant value.
+The naive forecast base its forecast only on the last observation. That's why naive forecast can't fully capture more complex dynamics or sudden changes in the time series. Mathematically adding a constant shift the entire forecast by a fixed amount: the value of the constant. That allows to incorporate domain knowledge or external information about the tourism industry that we expect to consistently influence the forecast in the future. In this case we know that global tourism has a positive growth rate of 6%. Which we have also found in practice with the analysis of the means of linear regressions.
+
+<div class="custom-space2"></div>
+
+***What should be the dependent variable and the predictors in a linear regression model for this data?***
+
+In its simple form, the linear regression forecast model assumes a linear relationship between the forecast variable (y) and a predictor variable (x). The model is represented by the equation:
+\[ y_t = \beta_0 + \beta_1 x_t + \varepsilon_t \]
+
+In the context of the tourism data, the only variable we have is time, quantified in the variable Time_count. Therefore, our dependent variable will be the value of the time series at t+1, and our independent variable will be time. As observed from the data and considerations related to the tourism context, we know that tourism tends to increase over time.
+
+
+***Fit the linear regression model to the first five series and compute forecast errors for the validation period.***
+
+```{r, echo=FALSE}
+linear_models <- list()
+
+first_five = c("Y1", "Y2", "Y3", "Y4", "Y5")
+for (ts in first_five) {
+  
+  current_series = filter(mod_df, variable == ts)
+  cutoff = max(current_series$Time_Count) - 3
+  
+  training_ = current_series%>%filter(Time_Count < cutoff)
+  validation_ = current_series%>%filter(Time_Count >= cutoff)
+  training_ <- na.omit(training_)
+  linear_model = lm(value ~ Time_Count, data = training_)
+  
+  predicted_values <- predict(linear_model, newdata = validation_)
+  mae <- mean(abs(predicted_values - validation_$value))
+  
+  mape <- mean(abs((predicted_values - validation_$value) / validation_$value)) * 100
+  
+  y_train <- training_$value
+  mean_absolute_training_error <- mean(abs(y_train - mean(y_train)))
+  mase <- mean(abs(predicted_values - validation_$value)) / mean_absolute_training_error
+  linear_models[[ts]] <- list(Linear_model = linear_model, MAE = mae, MAPE = mape, MASE = mase)
+  
+  plot = ggplot()+
+    geom_point(data=training_, aes(x=Time_Count, y=value))+
+    geom_line(data = validation_,aes(x=Time_Count, y=value), color="orange" , alpha=0.5)+
+    geom_point(data = validation_,aes(x=Time_Count, y=value), color="orange")+
+    geom_abline(intercept = coef(linear_model)[1], slope = coef(linear_model)[2], color = "darkgreen", size = 1, linetype="dashed") +
+    labs(title = paste("Linear Model for Time Series", ts),
+               subtitle = paste("MAE =", round(mae, 2), " | MAPE =", round(mape, 2), " | MASE =", round(mase, 2)),
+         x = "Time_Count",
+         y = "Value") +
+    theme_minimal()
+  
+  print(plot)
+}
+```
+
+The MAE is strongly influenced by the scale of time series data. For some series, linear regression appears consistent with the overall trend, but due to frequent significant deviations from actual values, it often results in very large MAE values. The MAPE and MASE seem to be more reliable measures with consistent values across all series. Particularly, linear regression outperforms the naive forecast in as many as 3 out of 5 cases
+
+
+<div class="custom-space2"></div>
+
+***Before choosing a linear regression, the winner described the following process:***
+***”I examined fitting a polynomial line to the data and using the line to predict future values. I tried using first through fifth order polynomials to find that the lowest MASE was obtained using a first order polynomial (simple regression line). This best fit line was used to predict future values. I also kept the R2 value of the fit for use in blending the results of the prediction.”***
+
+The possible flaws of this approach may be these:
+
+- The winner used a linear regression model, assuming a constant trend for future predictions. However, trends in real-world data can be nonlinear, and assuming linearity could lead to inaccurate predictions.
+
+- The use of the fifth order polinomial can lead to overfitting: When using a higher-order polynomial, such as a polynomial of degree 5, it can provide an excellent fit to the training data, even passing exactly through each data point. This increased flexibility allows the polynomial to closely follow the intricacies of the training data, capturing more detailed patterns and variations. However, it's important to note that while higher-order polynomials can fit the training data very closely, they also run the risk of overfitting, capturing noise and idiosyncrasies in the training data that may not generalize well to new, unseen data. This is an example of the bias-variance trade-off.
+
+- Use of R2: it does not directly measure the model's predictive capacity or its ability to make accurate forecasts. It is a measure of the proportion of the variance in the dependent variable that is predictable from the independent variables, but it does not indicate how close the predicted values are to the actual values.
+
+<div class="custom-space2"></div>
+
+
+***If we were to consider exponential smoothing, what particular type(s) of exponential smoothing are reasonable candidates?***
+
+When forecasting different time series, all with a constant/fixed positive trend, the most reasonable candidate for exponential smoothing would be the Holt's trend-corrected double exponential smoothing (DES). This method is suitable for handling data that exhibits a constant trend, as it explicitly incorporates a trend component. It is useful for data that exhibit a linear trend without seasonal effects. The method involves a forecast equation and two smoothing equations for the level and the trend. The forecast is a linear function of time, making it suitable for data with a linear trend.
+
+\[F_{t+m} = L_t + m \cdot T_t \]
+\[L_t = \alpha \cdot Y_t + (1 - \alpha) \cdot (L_{t-1} + T_{t-1})\]
+\[T_t = \beta \cdot (L_t - L_{t-1}) + (1 - \beta) \cdot T_{t-1}\]
+
+In the case we focus on a subsample of time series and we assume the presence of seasonality we can also adopt Triple Exponential Smoothing, also known as the Holt-Winters method. It is a more advanced variation of exponential smoothing. It can handle both trends and seasonality in the data. This method allows the level, trend, and seasonality patterns to change over time. To ensure that the seasonality is modeled correctly, the number of time steps in a seasonal period must be specified.
+
+***The winner concludes with possible improvements one being ”an investigation into how to come up with a blending ensemble method that doesn’t use much manual twerking would also be of benefit”. Can you suggest methods or an approach that would lead to easier automation of the ensemble step?***
+
+One possible solution could be to use automated hyperparameter tuning. It is a fundamental process in machine learning, aimed at finding the optimal combination of hyperparameters to produce the best model. Hyperparameter optimization in time series forecasting involves finding the best set of hyperparameters for a model to improve its forecasting performance. This is typically done through techniques such as random search, grid search, Bayesian optimization, or genetic algorithms. The process aims to find the right combination of hyperparameter values that minimize the forecast error or maximize the accuracy of the model. 
+
+
+***The competition focused on minimizing the average MAPE of the next four values across all 518 series. How does this goal differ from goals encountered in practice when considering tourism demand? Which steps in the forecasting process would likely be different in a real-life tourism forecasting scenario?***
+
+In a practical context, predicting tourism dynamics requires comprehensive consideration of influencing factors beyond the direct historical value of the time series. Factors such as population growth, economic development and popular travel trends form part of the forecasting framework. Effective tourism demand forecasting models must adapt to the dynamic nature of these factors and therefore require continuous monitoring and refinement of forecasting methods.
+
+Real-world tourism forecasting efforts take into account the inherent complexities of the tourism sector and need to move away from relying solely on historical time series values. To account for the complexity of demand fluctuations, the models used in this context may need to incorporate additional characteristics and external variables to provide a more nuanced representation of the various influences that shape travel patterns.
+
+Moreover, the temporal horizon of forecasting in the tourism sector extends beyond the limited horizon of four years, as encountered in certain competitive scenarios. Practical applications within tourism organizations often require forecasts spanning more protracted periods to inform strategic planning comprehensively. This protracted forecasting horizon may necessitate the adoption of diverse modeling techniques, attuned to capturing enduring trends and patterns over extended temporal intervals.
