@@ -4,6 +4,10 @@
 
 This project focused on analyzing and forecasting tourism time demand a dataset of 518 annual time series. Each series represents different aspects of tourism activities, such as inbound tourism numbers, visitor nights, and tourism expenditure across various countries. The series vary in length (from 7 to 43 years) and magnitude, making the forecasting task complex in terms of accuracy and model generalization.
 
+
+![000012](https://github.com/user-attachments/assets/8892d3f3-ee06-4853-9fa8-fc7a843b64e6)
+
+
 The main objective of the project was to develop and apply various **time series forecasting techniques** to predict future values, while addressing practical challenges related to handling a large number of heterogeneous series.
 
 ## Key Activities & Skills Applied
